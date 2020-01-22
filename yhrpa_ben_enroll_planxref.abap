@@ -1,14 +1,11 @@
 *&---------------------------------------------------------------------*
 *& Report ZHRPA_BEN_ENROLL_PLANXREF
+*& Report ZHRPA_BEN_VENDOR_PLANXREF
 *&---------------------------------------------------------------------*
 *& CLass to load the vendor plan xref table into program
 *&---------------------------------------------------------------------*
 REPORT yhrpa_ben_enroll_planxref.
 
-
-CONSTANTS   lowdate   TYPE  dats VALUE '19680101'.
-CONSTANTS   highdate  TYPE  dats VALUE '99991231'.
-CONSTANTS   zerodate  TYPE  c    LENGTH 8 VALUE '00000000'.
 
 ****
 **<<<< lcl_plan_xref >>>>
@@ -25,18 +22,19 @@ CLASS lcl_plan_xref DEFINITION.
               ,xref_value  TYPE  char32  "xref value - code to pass to vendor
             ,END OF plan_xref_s.
 
+    TYPES plan_xref_t   TYPE  STANDARD TABLE OF plan_xref_s WITH DEFAULT KEY.
+
     METHODS constructor IMPORTING iv_begda TYPE dats OPTIONAL iv_endda TYPE dats OPTIONAL  iv_xref_vendor TYPE char32.
 *<TASK> add recordsloaded count for error checking
-    METHODS get_xref_value IMPORTING iv_benyear TYPE pabrj iv_nplan TYPE char32 iv_vplan TYPE char32 EXPORTING ev_xref TYPE char32.
+    METHODS get_xref_value IMPORTING iv_nkuplan TYPE char32 EXPORTING ev_value TYPE char32.
 
-    DATA  mt_xref_value TYPE  STANDARD TABLE OF plan_xref_s.
-    DATA  vendor_id   TYPE char32.
+    DATA  mv_begda    TYPE  dats.
+    DATA  mv_endda    TYPE  dats.
+    DATA  mv_vendor   TYPE char32.
+
+    DATA  mt_xref_value TYPE  plan_xref_t.
 
 ENDCLASS.
-
-
-
-DATA  o_plan_xref  TYPE  REF TO lcl_plan_xref.
 
 
 
@@ -49,7 +47,6 @@ DATA  ss_show             TYPE    i VALUE 1.
 DATA  ss_enter            TYPE    i VALUE 0.
 DATA  ss_noenter          TYPE    i VALUE 1.
 DATA  ss_default_dd       TYPE    localfile.
-*DATA  ls_sscreen_values   TYPE  lcl_sel=>sscreen_values_s.
 
 * Screen block for data selection options
 SELECTION-SCREEN BEGIN OF BLOCK dsel_opt WITH FRAME TITLE TEXT-001.
@@ -59,42 +56,13 @@ PARAMETERS p_begda  TYPE  dats.
 SELECTION-SCREEN COMMENT 20(2) TEXT-005.
 PARAMETERS p_endda  TYPE  dats.
 SELECTION-SCREEN END OF LINE.
+SELECTION-SCREEN SKIP.
+SELECTION-SCREEN BEGIN OF LINE.
+SELECTION-SCREEN COMMENT 1(4) TEXT-006.
+PARAMETERS p_vend  TYPE  char32.
+SELECTION-SCREEN END OF LINE.
 SELECTION-SCREEN END OF BLOCK dsel_opt.
 
-* Screen block for Output file/directory options
-SELECTION-SCREEN BEGIN OF BLOCK file_opt WITH FRAME TITLE TEXT-003.
-SELECTION-SCREEN BEGIN OF LINE.
-SELECTION-SCREEN COMMENT 1(22) TEXT-013.
-PARAMETERS : p_outb_y RADIOBUTTON GROUP rb1 MODIF ID rb1.
-SELECTION-SCREEN COMMENT 26(4) TEXT-014.
-PARAMETERS : p_outb_n RADIOBUTTON GROUP rb1 MODIF ID rb1.
-SELECTION-SCREEN COMMENT 33(2) TEXT-015.
-SELECTION-SCREEN END OF LINE.
-SELECTION-SCREEN SKIP.
-PARAMETERS  p_ofile  TYPE localfile     MODIF ID ofo.
-
-* client/desktop data directory
-SELECTION-SCREEN SKIP.
-SELECTION-SCREEN BEGIN OF LINE.
-SELECTION-SCREEN COMMENT 1(23) TEXT-010 MODIF ID ofo.
-PARAMETERS:  p_client  RADIOBUTTON GROUP orbg USER-COMMAND disp MODIF ID ofo.
-SELECTION-SCREEN COMMENT 28(7) TEXT-008 MODIF ID ofo.
-PARAMETERS:       p_cl_dd      TYPE   localfile MODIF ID ofo.
-SELECTION-SCREEN END OF LINE.
-
-* server data directory
-SELECTION-SCREEN BEGIN OF LINE.
-SELECTION-SCREEN COMMENT 1(23) TEXT-000.    "just position cursor
-PARAMETERS:  p_server  RADIOBUTTON GROUP orbg DEFAULT 'X' MODIF ID ofo.
-SELECTION-SCREEN COMMENT 28(7) TEXT-009 MODIF ID ofo.
-PARAMETERS:       p_srv_dd    TYPE  localfile MODIF ID ofo.
-SELECTION-SCREEN END OF LINE.
-
-* server archive dir
-SELECTION-SCREEN SKIP.
-PARAMETERS:       p_srv_ad    TYPE  localfile MODIF ID ofo.
-
-SELECTION-SCREEN END OF BLOCK file_opt.
 
 *----------------------------------------------------------------------*
 * <<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<->>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>> *
@@ -113,7 +81,9 @@ START-OF-SELECTION.
     p_begda = p_endda(4) && '0101'.
   ENDIF.
 
-  CREATE OBJECT o_plan_xref EXPORTING iv_begda = p_begda iv_endda = p_endda iv_xref_vendor = '0168-HART'.
+  DATA(o_plan_xref) = NEW lcl_plan_xref( iv_begda = p_begda iv_endda = p_endda iv_xref_vendor = p_vend ).
+
+  o_plan_xref->get_xref_value( EXPORTING iv_nkuplan = 'NKU1' IMPORTING ev_value = DATA(lt_xref_value) ).
 
 *----------------------------------------------------------------------*
 * <<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<->>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>> *
@@ -178,31 +148,43 @@ START-OF-SELECTION.
 CLASS lcl_plan_xref IMPLEMENTATION.
 
   METHOD constructor.
+
     DATA  lv_begda  TYPE  dats.
     DATA  lv_endda  TYPE  dats.
-    DATA  lt_xref_value LIKE mt_xref_value.
 
-    IF iv_begda IS NOT SUPPLIED.
+
+    IF iv_begda IS NOT SUPPLIED OR iv_begda IS INITIAL.
       lv_begda = sy-datum.
     ELSE.
       lv_begda = iv_begda.
     ENDIF.
 
-    IF iv_endda IS NOT SUPPLIED.
+    IF iv_endda IS NOT SUPPLIED OR iv_endda IS INITIAL.
       lv_endda = sy-datum.
     ELSE.
       lv_endda = iv_endda.
     ENDIF.
 
-    vendor_id = iv_xref_vendor.
+    mv_begda = lv_begda.
+    mv_endda = lv_endda.
+    mv_vendor = iv_xref_vendor.
 
 *    SELECT * FROM zhr_benroll_vend INTO CORRESPONDING FIELDS OF TABLE lt_xref_value
-*        and begda LE iv_endda
-*        AND endda GE iv_begda
-*      where xref_vendor EQ iv_xref_vendor
+*      where xref_vendor EQ mv_vendor
+*        and begda LE mv_endda
+*        AND endda GE mv_begda
 *      ORDER BY nkuplan endda DESCENDING begda DESCENDING .
 
-    DELETE ADJACENT DUPLICATES FROM lt_xref_value COMPARING nkuplan .
+    DATA(lt_xref_value) = VALUE plan_xref_t(
+    ( begda = '19000101' endda = '99991231' nkuplan = 'NKU3' xref_vendor = '0168-HART' xref_value = 'value31' )
+    ( begda = '20190101' endda = '20191231' nkuplan = 'NKU1' xref_vendor = '0168-HART' xref_value = 'value11' )
+    ( begda = '20200101' endda = '99991231' nkuplan = 'NKU1' xref_vendor = '0168-HART' xref_value = 'value12' )
+    ( begda = '20200101' endda = '20200107' nkuplan = 'NKU2' xref_vendor = '0168-HART' xref_value = 'value21' )
+    ( begda = '20200108' endda = '99991231' nkuplan = 'NKU2' xref_vendor = '0168-HART' xref_value = 'value22' )
+    ).
+
+    SORT lt_xref_value BY nkuplan endda DESCENDING begda DESCENDING.
+    DELETE ADJACENT DUPLICATES FROM lt_xref_value COMPARING nkuplan endda.
     mt_xref_value = lt_xref_value.
 
   ENDMETHOD.
@@ -211,16 +193,18 @@ CLASS lcl_plan_xref IMPLEMENTATION.
 
   METHOD get_xref_value.
 
-    FIELD-SYMBOLS   <xref>   LIKE  LINE OF mt_xref_value.
+*DELETE    FIELD-SYMBOLS   <xref>   LIKE  LINE OF mt_xref_value.
 
-    CLEAR    ev_xref.
-    LOOP AT mt_xref_value ASSIGNING <xref>
-      WHERE nkuplan EQ iv_nplan.
+    CLEAR    ev_value.
+    LOOP AT mt_xref_value ASSIGNING FIELD-SYMBOL(<xref>)
+      WHERE nkuplan EQ iv_nkuplan
+        AND begda LE mv_endda
+        AND endda GE mv_begda.
 
       IF sy-subrc NE 0.
-        CLEAR ev_xref.
+        CLEAR ev_value.
       ELSE.
-        ev_xref = <xref>-xref_value.
+        ev_value = <xref>-xref_value.
       ENDIF.
       EXIT.
     ENDLOOP.
